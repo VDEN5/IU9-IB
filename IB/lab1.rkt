@@ -1,0 +1,5 @@
+(define (mod x) ((if(>= x 0) + -) x))
+(define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+(define (even t)(and (=(remainder t 2) 0)))
+(define (odd t)(and (=(remainder t 2) 1)))
+(define (power g c)(if (= c 0) 1 (* (power g(- c 1)) g)))

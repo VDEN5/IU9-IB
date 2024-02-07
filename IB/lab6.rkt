@@ -1,0 +1,150 @@
+;<expression> := <content> FINISH-SYMBOL
+;FINISH-SYMBOL
+(define finish-symbol (integer->char 0))
+;<expression> := <content> FINISH-SYMBOL
+(define (make-stream str)(append (string->list str)(list finish-symbol)))
+(define (peek stream)(or (null? stream) (car stream)))
+(define (next stream)(or (null? stream) (cdr stream)))
+(define (next-col x stream)(letrec ((loop (lambda (xs x)(if (or (= x 0) (null? xs))
+                       xs (loop (cdr xs) (- x 1))))))(loop stream x)))
+;<sign> := - | +
+(define (Sign? symb)(or (equal? symb #\+)(equal? symb #\-)))
+(define (peak-sign char)(if (equal? char #\+) 1 -1))
+;<digit> := 0|1|...|9
+(define (Digit? char)(and (char? char)(<= (char->integer #\0)
+(char->integer char))(>= (char->integer #\9) (char->integer char))))
+(define (scan-digit char)(and (char? char)(<= (char->integer #\0) (char->integer char))
+(>= (char->integer #\9) (char->integer char))(- (char->integer char) (char->integer #\0))))
+;<number> := <digit> | <number> <digit>
+(define (Num? stream)
+  (and (not (null? stream))
+      (letrec ((loop (lambda (xs)(or (null? xs)(and (Digit? (peek xs)) (loop (cdr xs)))))))
+        (loop stream))))
+(define (Num stream) (letrec ((loop (lambda (xs res)(if (null? xs) res
+                       (loop (cdr xs) (+ (* res 10) (scan-digit (car xs))))))))
+    (loop stream 0)))
+    
+;<fraction> := <sign> <number> SLASH <number> | <number> SLASH <number>
+(define (frac stream) 
+  (letrec ((stream-numerator '())
+           (stream-denominator '())
+           (sign 1)
+           (make-stream-loop (lambda (xs1 xs2 finish)
+                         (if (or (equal? (peek xs1) finish) (equal? (peek xs1) finish-symbol) (null? xs1))
+                                   xs2
+                                   (make-stream-loop (cdr xs1) (append xs2 (list (peek xs1))) finish)))))
+    ;sign | E
+    (if (Sign? (peek stream))(begin (set! sign (peak-sign (peek stream))) (set! stream (next stream))))
+    ;numerator 
+    (set! stream-numerator (make-stream-loop stream '() #\/))
+    (set! stream (next-col (length stream-numerator) stream))
+    ;SLASH
+    (and (equal? (peek stream) #\/)(begin
+          (set! stream (next stream))
+          ;denominator
+          (set! stream-denominator (make-stream-loop stream '() finish-symbol))
+          (set! stream (next-col (length stream-denominator) stream))
+          (and (Num? stream-numerator) (Num? stream-denominator)
+              (list (* sign (Num stream-numerator)) (Num stream-denominator)))))))
+;<content> := <fraction> | <other-symbols> | <content> <fraction> | <content> <other-symbols>
+(define (fracs stream)
+  (letrec ((x #f)(list-fracs '())
+           (loop (lambda (xs fracs)
+                   (if (equal? (peek xs) finish-symbol) fracs
+                       (if (or (Digit? (peek xs)) (Sign? (peek xs)))
+                           (begin (set! x (try-frac xs))
+                                  (and (not (null? x))
+                                      (loop (next-col (length x) xs) (append fracs (frac x)))))
+                           (if (null? xs) fracs (loop (cdr xs) fracs))))))
+           (try-frac (lambda (xs) (letrec ((loop2 (lambda (xs1 xs2 res)
+                                         (if (null? xs1) res
+                                             (begin (set! xs2 (append xs2 (list (car xs1))))
+                                                    (if (frac xs2) (set! res xs2))
+                                                    (loop2 (cdr xs1) xs2 res))))))
+                         (loop2 xs '() '()))))
+           (complete-fracs (lambda (xs1 xs2) (if (null? xs1) xs2
+                                 (complete-fracs (cdr (cdr xs1))
+(append xs2 (list (/ (car xs1) (car (cdr xs1))))))))))
+    (set! list-fracs (loop stream '()))
+    (and (not(equal? list-fracs #f))
+        (complete-fracs list-fracs '()))))                                  
+(define (check-frac str) (or (list? (frac(make-stream str)))(frac (make-stream str)) ))
+(define (scan-frac str)(and (check-frac str)
+      (/ (car (frac (make-stream str))) (car (cdr (frac (make-stream str)))))))
+(define (scan-many-fracs str)(fracs (make-stream str)))
+; <Program>  ::= <Articles> <Body> .
+; <Articles> ::= <Article> <Articles> | .
+; <Article>  ::= define word <Body> end .
+; <Body>     ::= if <Body> endif <Body> | integer <Body> | word <Body> | .
+(define exit #f)
+(define (find-head xs target)
+  (let loop ((xs xs) (acc '()))
+    (and (not (null? xs))
+         (if (equal? (car xs) target)
+             acc
+             (loop (cdr xs) (append acc (list (car xs))))))))
+(define (find-tail xs target)
+  (if (equal? (car xs) target)
+      (cdr xs)
+      (find-tail (cdr xs) target)))
+(define (tail-endif program)
+  (let loop ((program program) (i -1))
+    (and (not(null? program))
+        (let ((word (car program)))
+          (cond
+            ((and (equal? word 'endif) (= i 0)) (cdr program))
+            ((equal? word 'endif) (loop (cdr program) (- i 1)))
+            ((equal? word 'if) (loop (cdr program) (+ i 1)))
+            (else (loop (cdr program) depth)))))))
+(define (last xs)
+  (car (reverse xs)))
+(define (head xs n)
+  (if (or (= n -1) (null? xs)) '()
+      (cons (car xs) (head (cdr xs) (- n 1)))))
+(define (push xs x)
+  (append xs (list x)))
+(define keywords '(if endif define))
+(define (parse program)
+  (call-with-current-continuation
+   (lambda (x)
+     (set! return x)
+     (let ((program (vector->list program)))
+       (if (equal? (car program) 'define)
+           (let ((articles (parse-articles program)))
+             (cons (head articles (- (length articles) 2))
+                   (list (parse-body (last articles)))))
+           (cons '() (list (parse-body program))))))))
+(define (parse-articles program)
+  (let loop ((program program))
+    (if (not (null? program))
+        (let ((word (car program)) (other (cdr program)))
+          (if (equal? word 'define)
+              (if (null? other)
+                  (exit #f)
+                  (if (member (car other) keywords)
+                      (exit #f)
+                      (let ((head (find-head (cdr other) 'end)))
+                        (if head
+                            (cons (cons (car other) (list (parse-body head)))
+                                  (loop (find-tail (cdr other) 'end)))
+                            (exit #f)))))
+              (list program)))
+        (list program))))
+(define (parse-body program)
+  (let loop ((program program) (parsed '()) (stack '()))
+    (if (not (null? program))
+        (let ((word (car program))
+              (nextword (if (> 1 (length program))
+                            (cadr program))))
+          (cond ((equal? word 'if)
+             (let ((tail (tail-endif program)))
+               (if tail
+                   (loop tail (push parsed (list 'if (loop (cdr program) '() (cons 'if stack)))) stack)
+                   (exit #f))))
+            ((equal? word 'endif)
+             (if (and (not (null? stack))(equal? (car stack) 'if))
+                 parsed
+                 (exit #f)))
+            ((or (equal? word 'define)(equal? word 'end)) (exit #f))
+            (else (loop (cdr program) (push parsed word) stack))))
+        parsed)))
